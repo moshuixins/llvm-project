@@ -1,114 +1,218 @@
-# The LLVM Compiler Infrastructure
+# Hikari-LLVM14
 
-This directory and its sub-directories contain source code for LLVM,
-a toolkit for the construction of highly optimized compilers,
-optimizers, and run-time environments.
+A fork of HikariObfuscator [WIP]
 
-The README briefly describes how to get started with building LLVM.
-For more information on how to contribute to the LLVM project, please
-take a look at the
-[Contributing to LLVM](https://llvm.org/docs/Contributing.html) guide.
+## 原项目链接
 
-## Getting Started with the LLVM System
+[https://github.com/HikariObfuscator/Hikari](https://github.com/HikariObfuscator/Hikari)
 
-Taken from https://llvm.org/docs/GettingStarted.html.
+## 使用
 
-### Overview
+下载后编译
 
-Welcome to the LLVM project!
+### Swift 混淆支持
 
-The LLVM project has multiple components. The core of the project is
-itself called "LLVM". This contains all of the tools, libraries, and header
-files needed to process intermediate representations and convert them into
-object files.  Tools include an assembler, disassembler, bitcode analyzer, and
-bitcode optimizer.  It also contains basic regression tests.
+编译 Swift Toolchain 的时间非常长。可以使用[Hanabi](https://github.com/NeHyci/Hanabi)
 
-C-like languages use the [Clang](http://clang.llvm.org/) front end.  This
-component compiles C, C++, Objective-C, and Objective-C++ code into LLVM bitcode
--- and from there into object files, using LLVM.
+需要注意的是添加混淆参数的位置是在**Swift Compiler - Other Flags**中的**Other Swift Flags**，并且是在前面加-Xllvm，而不是-mllvm。
+关闭优化的地方在**Swift Compiler - Code Generation**中的**Optimization Level**，设置为 _No Optimization [-Onone]_
 
-Other components include:
-the [libc++ C++ standard library](https://libcxx.llvm.org),
-the [LLD linker](https://lld.llvm.org), and more.
+每次编译前需要先 Shift+Command+K(Clean Build Folder)，因为 Swift 并不会像 OC 一样检测到项目 cflag 的修改就会重新编译
 
-### Getting the Source Code and Building LLVM
+### 混淆选项
 
-The LLVM Getting Started documentation may be out of date.  The [Clang
-Getting Started](http://clang.llvm.org/get_started.html) page might have more
-accurate information.
+-aesSeed
 
-This is an example work-flow and configuration to get and build the LLVM source:
+指定 cryptoutils 的随机数生成种子。默认为 0x1337
 
-1. Checkout LLVM (including related sub-projects like Clang):
+-enable-allobf
 
-     * ``git clone https://github.com/llvm/llvm-project.git``
+同时启用 AntiClassDump, BogusControlFlow(虚假控制流), Flattening(控制流平坦化), FunctionCallObfusate(混淆函数调用), FunctionWrapper(封装函数调用), IndirectBranch(间接跳转), SplitBasicBlocks(切割基本块), StringEncryption(字符串加密), Substitution(指令替换)。默认关闭
 
-     * Or, on windows, ``git clone --config core.autocrlf=false
-    https://github.com/llvm/llvm-project.git``
+#### AntiClassDump
 
-2. Configure and build LLVM and Clang:
+-enable-acdobf
 
-     * ``cd llvm-project``
+启用 AntiClassDump。默认关闭
 
-     * ``cmake -S llvm -B build -G <generator> [options]``
+-acd-use-initialize
 
-        Some common build system generators are:
+将动态注册代码添加到+initialize。默认开启
 
-        * ``Ninja`` --- for generating [Ninja](https://ninja-build.org)
-          build files. Most llvm developers use Ninja.
-        * ``Unix Makefiles`` --- for generating make-compatible parallel makefiles.
-        * ``Visual Studio`` --- for generating Visual Studio projects and
-          solutions.
-        * ``Xcode`` --- for generating Xcode projects.
+-acd-rename-methodimp
 
-        Some common options:
+重命名在 IDA 中显示的方法函数(修改为 ACDMethodIMP)。默认关闭
 
-        * ``-DLLVM_ENABLE_PROJECTS='...'`` and ``-DLLVM_ENABLE_RUNTIMES='...'`` ---
-          semicolon-separated list of the LLVM sub-projects and runtimes you'd like to
-          additionally build. ``LLVM_ENABLE_PROJECTS`` can include any of: clang,
-          clang-tools-extra, cross-project-tests, flang, libc, libclc, lld, lldb,
-          mlir, openmp, polly, or pstl. ``LLVM_ENABLE_RUNTIMES`` can include any of
-          libcxx, libcxxabi, libunwind, compiler-rt, libc or openmp. Some runtime
-          projects can be specified either in ``LLVM_ENABLE_PROJECTS`` or in
-          ``LLVM_ENABLE_RUNTIMES``.
+#### FunctionCallObfuscate
 
-          For example, to build LLVM, Clang, libcxx, and libcxxabi, use
-          ``-DLLVM_ENABLE_PROJECTS="clang" -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi"``.
+-enable-fco
 
-        * ``-DCMAKE_INSTALL_PREFIX=directory`` --- Specify for *directory* the full
-          path name of where you want the LLVM tools and libraries to be installed
-          (default ``/usr/local``). Be careful if you install runtime libraries: if
-          your system uses those provided by LLVM (like libc++ or libc++abi), you
-          must not overwrite your system's copy of those libraries, since that
-          could render your system unusable. In general, using something like
-          ``/usr`` is not advised, but ``/usr/local`` is fine.
+启用 FunctionCallObfuscate。默认关闭
 
-        * ``-DCMAKE_BUILD_TYPE=type`` --- Valid options for *type* are Debug,
-          Release, RelWithDebInfo, and MinSizeRel. Default is Debug.
+-fcoconfig
 
-        * ``-DLLVM_ENABLE_ASSERTIONS=On`` --- Compile with assertion checks enabled
-          (default is Yes for Debug builds, No for all other build types).
+FunctionCallObfuscate 的配置文件路径，参照 Hikari 原项目的 wiki
 
-      * ``cmake --build build [-- [options] <target>]`` or your build system specified above
-        directly.
+#### AntiHooking (修改过)
 
-        * The default target (i.e. ``ninja`` or ``make``) will build all of LLVM.
+整体开启这个功能会使生成的二进制文件大小急剧膨胀，建议只在部分函数开启这个功能(toObfuscate)
 
-        * The ``check-all`` target (i.e. ``ninja check-all``) will run the
-          regression tests to ensure everything is in working order.
+支持检测 Objective-C 运行时 Hook。如果检测到就会调用 AHCallBack 函数(从 PreCompiled IR 获取)，如果不存在 AHCallBack，就会退出程序。
 
-        * CMake will generate targets for each tool and library, and most
-          LLVM sub-projects generate their own ``check-<project>`` target.
+目前只支持 arm64，在函数中插入代码检测当前函数是否被 Hook，如果检测到就会调用 AHCallBack 函数(从 PreCompiled IR 获取)，如果不存在 AHCallBack，就会退出程序。
 
-        * Running a serial build will be **slow**.  To improve speed, try running a
-          parallel build.  That's done by default in Ninja; for ``make``, use the option
-          ``-j NNN``, where ``NNN`` is the number of parallel jobs, e.g. the number of
-          CPUs you have.
+PreCompiled IR 是指自定义的 LLVM Bitcode 文件，可以通过在存在回调函数的源文件的编译命令(C Flags)中加上`-emit-llvm`生成，然后放到指定位置即可
 
-      * For more information see [CMake](https://llvm.org/docs/CMake.html)
+-enable-antihook
 
-Consult the
-[Getting Started with LLVM](https://llvm.org/docs/GettingStarted.html#getting-started-with-llvm)
-page for detailed information on configuring and compiling LLVM. You can visit
-[Directory Layout](https://llvm.org/docs/GettingStarted.html#directory-layout)
-to learn about the layout of the source code tree.
+启用 AntiHooking。默认关闭
+
+-ah_antirebind
+
+使生成的文件无法被 fishhook 重绑定符号
+
+-adhexrirpath
+
+AntiHooking PreCompiled IR 文件的路径
+
+#### AntiDebugging (修改过)
+
+自动在函数中进行反调试，如果有 InitADB 和 ADBCallBack 函数(从 PreCompiled IR 获取)，就会调用 ADBInit 函数，如果不存在 InitADB 和 ADBCallBack 函数并且是 Apple ARM64 平台，就会自动在 void 返回类型的函数中插入内联汇编反调试，否则不做处理。
+
+-enable-adb
+
+启用 AntiDebugging。默认关闭
+
+-adb_prob
+
+每个函数被添加反调试的概率。默认为 40
+
+-adbextirpath
+
+AntiDebugging PreCompiled IR 文件的路径
+
+#### StringEncryption (修改过)
+
+-enable-strcry
+
+启用 StringEncryption。默认关闭
+
+#### SplitBasicBlocks
+
+-enable-splitobf
+
+启用 SplitBasicBlocks。默认关闭
+
+-split_num
+
+每个基本块切割的数量。默认为 2
+
+#### BogusControlFlow (修改过)
+
+-enable-bcfobf
+
+启用 BogusControlFlow。默认关闭
+
+-bcf_prob
+
+每个基本块被添加虚假控制流的概率。默认为 70
+
+-bcf_loop
+
+虚假控制流在每个函数混淆的次数。默认为 1
+
+-bcf_cond_compl
+
+生成分支条件的表达式复杂程度。默认为 3
+
+-bcf_junkasm
+
+在虚假块中插入花指令，干扰 IDA 对函数的识别。默认关闭
+
+-bcf_junkasm_minnum
+
+在虚假块中花指令的最小数量。默认为 1
+
+-bcf_junkasm_maxnum
+
+在虚假块中花指令的最大数量。默认为 3
+
+-bcf_createfunc
+
+使用函数封装不透明谓词。默认关闭
+
+#### Flattening (修改过)
+
+经过修改，支持混淆存在 C++异常处理的函数
+
+-enable-cffobf
+
+启用 Flattening。默认关闭
+
+#### Substitution (修改过)
+
+-enable-subobf
+
+启用 Substitution。默认关闭
+
+-sub_loop
+
+Substitution 在每个函数混淆的次数。默认为 1
+
+-sub_prob
+
+每个指令被 Substitution 混淆的概率。默认为 50
+
+#### ConstantEncryption (修改过)
+
+修改自https://iosre.com/t/llvm-llvm/11132
+
+-enable-constenc
+
+启用 ConstantEncryption。默认关闭
+
+-constenc_times
+
+ConstantEncryption 在每个函数混淆的次数。默认为 1
+
+-constenc_prob
+
+每个指令被 ConstantEncryption 混淆的概率。默认为 50
+
+-constenc_togv
+
+将数字常量替换为全局变量，以对抗反编译器自动简化表达式。默认关闭
+
+-constenc_subxor
+
+替换 ConstantEncryption 的 XOR 运算，使其变得更加复杂
+
+#### IndirectBranch (修改过)
+
+-enable-indibran
+
+启用 IndirectBranch。默认关闭
+
+-indibran-use-stack
+
+将跳转表地址和索引加载到栈中，再从栈中读取。默认关闭
+
+-indibran-enc-jump-target
+
+加密跳转表和索引。默认关闭
+
+#### FunctionWrapper(修改过)
+
+经过修改，支持混淆存在值传递(passed by value)的函数
+
+-enable-funcwra
+
+启用 FunctionWrapper。默认关闭
+
+-fw_prob
+
+每个函数调用被 FunctionWrapper 混淆的概率。默认为 30
+
+-fw_times
+
+FunctionWrapper 在每个函数调用混淆的次数。默认为 2

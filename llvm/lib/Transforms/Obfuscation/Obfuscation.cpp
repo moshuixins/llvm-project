@@ -1,3 +1,10 @@
+/*
+ * @Author: 墨水心
+ * @Date: 2023-02-07 23:13:24
+ * @LastEditTime: 2023-02-08 21:31:07
+ * @Description: 立如芍药，坐如牡丹，行如百合
+ * @FilePath: \llvm-project\llvm\lib\Transforms\Obfuscation\Obfuscation.cpp
+ */
 // For open-source license, please refer to
 // [License](https://github.com/HikariObfuscator/Hikari/wiki/License).
 //===----------------------------------------------------------------------===//
@@ -109,11 +116,13 @@ struct Obfuscation : public ModulePass {
         new TimerGroup("Obfuscation Timer Group", "Obfuscation Timer Group");
     Timer *timer = new Timer("Obfuscation Timer", "Obfuscation Timer", *tg);
     timer->startTimer();
-
-    ModulePass *MP = createAntiHookPass(EnableAntiHooking);
-    MP->doInitialization(M);
-    MP->runOnModule(M);
-    delete MP;
+    ModulePass *MP;
+    if (EnableAntiHooking) {
+      ModulePass *MP = createAntiHookPass(EnableAntiHooking);
+      MP->doInitialization(M);
+      MP->runOnModule(M);
+      delete MP;
+    }
     // Initial ACD Pass
     if (EnableAllObfuscation || EnableAntiClassDump) {
       ModulePass *P = createAntiClassDumpPass();
@@ -128,9 +137,11 @@ struct Obfuscation : public ModulePass {
       if (!F.isDeclaration())
         FP->runOnFunction(F);
     delete FP;
-    MP = createAntiDebuggingPass(EnableAntiDebugging);
-    MP->runOnModule(M);
-    delete MP;
+    if (EnableAntiDebugging) {
+      MP = createAntiDebuggingPass(EnableAntiDebugging);
+      MP->runOnModule(M);
+      delete MP;
+    }
     // Now Encrypt Strings
     MP = createStringEncryptionPass(EnableAllObfuscation ||
                                     EnableStringEncryption);
