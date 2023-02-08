@@ -1,10 +1,6 @@
 name: CMake
 
 on:
-  push:
-    branches: [ "release/14.x" ]
-  pull_request:
-    branches: [ "release/14.x" ]
   workflow_dispatch:
 
 env:
