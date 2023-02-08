@@ -1,10 +1,6 @@
 name: LLVM Project Version Check
 
 on:
-  push:
-    branches:
-      - 'release/**'
-    pull_request:
 
 
 jobs:
