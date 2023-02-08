@@ -1,4 +1,12 @@
 /*
+ * @Author: 墨水心
+ * @Date: 2023-02-07 23:13:24
+ * @LastEditTime: 2023-02-08 13:04:00
+ * @Description: 立如芍药，坐如牡丹，行如百合
+ * @FilePath:
+ * \llvm-project\llvm\lib\Transforms\Obfuscation\ConstantEncryption.cpp
+ */
+/*
     LLVM ConstantEncryption Pass
     Copyright (C) 2017 Zhang(http://mayuyu.io)
 

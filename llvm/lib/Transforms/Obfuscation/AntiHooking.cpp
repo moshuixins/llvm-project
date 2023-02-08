@@ -16,6 +16,10 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include "llvm/ADT/Triple.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/MCJIT.h"
+#include "llvm/ExecutionEngine/RTDyldMemoryManager.h"
+#include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
@@ -38,13 +42,6 @@
 #include <iostream>
 #include <string>
 
-// Arm A64 Instruction Set for A-profile architecture 2022-12, Page 56
-#define AARCH64_SIGNATURE_B 0b000101
-// Arm A64 Instruction Set for A-profile architecture 2022-12, Page 75
-#define AARCH64_SIGNATURE_BR 0b1101011000011111000000
-// Arm A64 Instruction Set for A-profile architecture 2022-12, Page 79
-#define AARCH64_SIGNATURE_BRK 0b11010100001
-
 static cl::opt<string>
     PreCompiledIRPath("adhexrirpath",
                       cl::desc("External Path Pointing To Pre-compiled Anti "
@@ -57,6 +54,7 @@ static cl::opt<bool> AntiRebindSymbol("ah_antirebind",
 
 using namespace llvm;
 using namespace std;
+
 namespace llvm {
 struct AntiHook : public ModulePass {
   static char ID;
@@ -65,6 +63,7 @@ struct AntiHook : public ModulePass {
   bool opaquepointers;
   bool hasobjcmethod;
   Triple triple;
+  map<string, GlobalVariable *> funcname2gv;
   AntiHook() : ModulePass(ID) {
     this->flag = true;
     this->hasobjcmethod = false;
@@ -141,11 +140,16 @@ struct AntiHook : public ModulePass {
   }
   bool runOnModule(Module &M) override {
     for (Function &F : M) {
-      if (toObfuscate(flag, &F, "antihook")) {
+      if (toObfuscate(flag, &F, "antihook") && !F.isPresplitCoroutine() &&
+          !F.hasFnAttribute(Attribute::AttrKind::AlwaysInline)) {
         errs() << "Running AntiHooking On " << F.getName() << "\n";
-        if (triple.isAArch64()) {
-          HandleInlineHookAArch64(&F);
-        }
+        if (F.hasFnAttribute(Attribute::AttrKind::MinSize))
+          F.removeFnAttr(Attribute::AttrKind::MinSize);
+        if (F.hasFnAttribute(Attribute::AttrKind::OptimizeForSize))
+          F.removeFnAttr(Attribute::AttrKind::OptimizeForSize);
+        if (!F.hasOptNone())
+          F.addFnAttr(Attribute::AttrKind::OptimizeNone);
+        HandleInlineHook(&F);
         if (AntiRebindSymbol)
           for (Instruction &I : instructions(F))
             if (isa<CallInst>(&I) || isa<InvokeInst>(&I)) {
@@ -223,54 +227,68 @@ struct AntiHook : public ModulePass {
         }
       }
     }
+    genMachineCodes(M);
     return true;
   } // End runOnFunction
 
-  void HandleInlineHookAArch64(Function *F) {
+  void genMachineCodes(Module &M) {
+    InitializeAllTargetInfos();
+    InitializeAllTargets();
+    InitializeAllTargetMCs();
+    InitializeAllAsmPrinters();
+    InitializeAllAsmParsers();
+    InitializeAllDisassemblers();
+    InitializeAllTargetMCAs();
+
+    RTDyldMemoryManager *MemMgr = new SectionMemoryManager();
+
+    ExecutionEngine *EE =
+        EngineBuilder(CloneModule(M))
+            .setEngineKind(EngineKind::Kind::JIT)
+            .setOptLevel(CodeGenOpt::Level::None)
+            .setVerifyModules(true)
+            .setMCJITMemoryManager(std::unique_ptr<RTDyldMemoryManager>(MemMgr))
+            .create();
+    EE->finalizeObject();
+    for (Function &F : M)
+      if (GlobalVariable *GV = funcname2gv[F.getName().str()])
+        GV->setInitializer(ConstantInt::get(
+            Type::getInt32Ty(M.getContext()),
+            *(uint32_t *)EE->getFunctionAddress(F.getName().str())));
+  }
+
+  void HandleInlineHook(Function *F) {
+    /*
+   We split the originalBB A into:
+      A < - InlineHook Detection
+      | \
+      |  B for handler()
+      | /
+      C < - Original Following BB
+   */
+
+    Type *Int32Ty = Type::getInt32Ty(F->getParent()->getContext());
+
+    GlobalVariable *GV = new GlobalVariable(
+        *F->getParent(), Int32Ty, true,
+        GlobalValue::LinkageTypes::PrivateLinkage,
+        ConstantInt::getNullValue(Int32Ty), F->getName() + "uint32Signature");
+    funcname2gv[F->getName().str()] = GV;
     BasicBlock *A = &(F->getEntryBlock());
     BasicBlock *C = A->splitBasicBlock(A->getFirstNonPHIOrDbgOrLifetime());
     BasicBlock *B =
-        BasicBlock::Create(F->getContext(), "HookDetectedHandler", F);
-    BasicBlock *Detect =
-        BasicBlock::Create(F->getContext(), "", F);
-    BasicBlock *Detect2 = BasicBlock::Create(F->getContext(), "", F);
+        BasicBlock::Create(A->getContext(), "HookDetectedHandler", F, C);
     // Change A's terminator to jump to B
     // We'll add new terminator in B to jump C later
     A->getTerminator()->eraseFromParent();
-    BranchInst::Create(Detect, A);
 
-    IRBuilder<> IRBDetect(Detect);
-    IRBuilder<> IRBDetect2(Detect2);
+    IRBuilder<> IRBA(A);
     IRBuilder<> IRBB(B);
 
-    Type *Int64Ty = Type::getInt64Ty(F->getContext());
-    Type *Int32Ty = Type::getInt32Ty(F->getContext());
-    Type *Int32PtrTy = Type::getInt32PtrTy(F->getContext());
-
-    Value *Load =
-        IRBDetect.CreateLoad(Int32Ty, IRBDetect.CreateBitCast(F, Int32PtrTy));
-    Value *LS2 = IRBDetect.CreateLShr(Load, ConstantInt::get(Int32Ty, 26));
-    Value *ICmpEQ2 = IRBDetect.CreateICmpEQ(LS2, ConstantInt::get(Int32Ty, AARCH64_SIGNATURE_B));
-    Value *LS3 = IRBDetect.CreateLShr(Load, ConstantInt::get(Int32Ty, 21));
-    Value *ICmpEQ3 = IRBDetect.CreateICmpEQ(LS3, ConstantInt::get(Int32Ty, AARCH64_SIGNATURE_BRK));
-    Value *Or = IRBDetect.CreateOr(ICmpEQ2, ICmpEQ3);
-    IRBDetect.CreateCondBr(Or, B, Detect2);
-
-    Value *PTI = IRBDetect2.CreatePtrToInt(F, Int64Ty);
-    Value *AddFour = IRBDetect2.CreateAdd(PTI, ConstantInt::get(Int64Ty, 4));
-    Value *ITP = IRBDetect2.CreateIntToPtr(AddFour, Int32PtrTy);
-    Value *Load2 = IRBDetect2.CreateLoad(Int32Ty, ITP);
-    Value *LS4 = IRBDetect2.CreateLShr(Load2, ConstantInt::get(Int32Ty, 10));
-    Value *ICmpEQ4 = IRBDetect2.CreateICmpEQ(
-        LS4, ConstantInt::get(Int32Ty, AARCH64_SIGNATURE_BR));
-    Value *AddEight = IRBDetect2.CreateAdd(PTI, ConstantInt::get(Int64Ty, 8));
-    Value *ITP2 = IRBDetect2.CreateIntToPtr(AddEight, Int32PtrTy);
-    Value *Load3 = IRBDetect2.CreateLoad(Int32Ty, ITP2);
-    Value *LS5 = IRBDetect2.CreateLShr(Load3, ConstantInt::get(Int32Ty, 10));
-    Value *ICmpEQ5 = IRBDetect2.CreateICmpEQ(
-        LS5, ConstantInt::get(Int32Ty, AARCH64_SIGNATURE_BR));
-    Value *Or2 = IRBDetect2.CreateOr(ICmpEQ4, ICmpEQ5);
-    IRBDetect2.CreateCondBr(Or2, B, C);
+    Value *toDetect = IRBA.CreateLoad(Int32Ty, F);
+    Value *ICmpNE =
+        IRBA.CreateICmpNE(toDetect, IRBA.CreateLoad(GV->getValueType(), GV));
+    IRBA.CreateCondBr(ICmpNE, B, C);
     CreateCallbackAndJumpBack(&IRBB, C);
   }
 
